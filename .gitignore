@@ -3,3 +3,4 @@ checkpoints/**
 log/**
 *.png
 *.mp4
+canny_edge_detector
