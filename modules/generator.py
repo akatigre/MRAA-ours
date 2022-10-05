@@ -69,11 +69,9 @@ class Generator(nn.Module):
             optical_flow = optical_flow.permute(0, 3, 1, 2)
             optical_flow = F.interpolate(optical_flow, size=(h, w), mode='bilinear')
             optical_flow = optical_flow.permute(0, 2, 3, 1)
-        return F.grid_sample(inp, optical_flow)
+        return F.grid_sample(inp, optical_flow), optical_flow
 
     def apply_optical(self, input_previous=None, input_skip=None, motion_params=None):
-        warped = {}
-
         if motion_params is not None:
             if 'occlusion_map' in motion_params:
                 occlusion_map = motion_params['occlusion_map']
@@ -81,29 +79,29 @@ class Generator(nn.Module):
                 occlusion_map = None
             deformation = motion_params['optical_flow']
             
-            input_skip = self.deform_input(input_skip, deformation)
+            input_skip, _ = self.deform_input(input_skip, deformation)
 
             if occlusion_map is not None:
                 if input_skip.shape[2] != occlusion_map.shape[2] or input_skip.shape[3] != occlusion_map.shape[3]:
                     occlusion_map = F.interpolate(occlusion_map, size=input_skip.shape[2:], mode='bilinear')
                 if input_previous is not None:
-                    if input_skip.shape[1]==3:
-                        warped['input_skip'] = input_skip # deformed source
-                        warped['input_previous'] = input_previous # deformed & occluded from previous
+                    # if input_skip.shape[1]==3:
+                    #     warped['input_skip'] = input_skip # deformed source
+                    #     warped['input_previous'] = input_previous # deformed & occluded from previous
                         
                     input_skip = input_skip * occlusion_map + input_previous * (1 - occlusion_map)
-                    if input_skip.shape[1]==3:
-                        warped['input_occluded'] = input_skip
+                    # if input_skip.shape[1]==3:
+                    #     warped['input_occluded'] = input_skip
                 else:
                     input_skip = input_skip * occlusion_map
             out = input_skip
         else:
             out = input_previous if input_previous is not None else input_skip
-        return out, warped
+        return out, occlusion_map
 
     def forward(self, source_image256, source_image512, driving_region_params, source_region_params, bg_params=None):
-        gt_source_shape = source_image256.shape[0]
-        real_source_shape = source_image512.shape[0]
+        # gt_source_shape = source_image256.shape[-1]
+        # real_source_shape = source_image512.shape[-1]
         out = self.first(source_image512) # torch.Size([1, 64, 512, 512])
         skips = [out]
         for i in range(len(self.down_blocks)):
@@ -121,43 +119,40 @@ class Generator(nn.Module):
                                                           source_region_params=source_region_params,
                                                           bg_params=bg_params)
             
-            
-            for k in ['optical_flow', 'occlusion_map', 'sparse_motion']:
+            #! 뭔가 이상한데...?
+            # for k in ['optical_flow', 'occlusion_map', 'sparse_motion']:
                 # sparse_motion: torch.Size([1, 11, 64, 64, 2])
                 # optical_flow: torch.Size([1, 64, 64, 2])
                 # occlusion_map: torch.Size([1, 1, 64, 64])
-                if gt_source_shape != real_source_shape:
-                    if k=='optical_flow':
-                        v = motion_params[k].permute(0, 3, 1, 2)
-                    elif k=='sparse_motion':
-                        v = motion_params[k].permute(0, 1, 4, 2, 3)
-                    else:
-                        v = motion_params[k]
-                    interp_size = (512//4, 512//4)
-                    if v.dim()!=4:
-                        v_ = []
-                        for idx in range(v.shape[1]):
-                            v_.append(F.interpolate(v[:,idx], size=interp_size, mode='nearest'))
-                        v = torch.cat(v_, dim=0)[None]
-                    else:
-                        v = F.interpolate(v, size=interp_size, mode='nearest')
-                    if k=='optical_flow':
-                        v = v.permute(0, 2, 3, 1)
-                    elif k=='sparse_motion':
-                        v = v.permute(0, 1, 3, 4, 2)
-                    motion_params[k] = v
-                
-                   
-                output_dict[k] = motion_params.get(k)
-            output_dict["deformed"] = self.deform_input(source_image512, motion_params['optical_flow'])
-
+                # print(f"before: {motion_params[k].shape}")
+                # if gt_source_shape != real_source_shape:
+                #     if k=='optical_flow':
+                #         v = motion_params[k].permute(0, 3, 1, 2)
+                #     elif k=='sparse_motion':
+                #         v = motion_params[k].permute(0, 1, 4, 2, 3)
+                #     else:
+                #         v = motion_params[k]
+                #     interp_size = (512//4, 512//4)
+                #     if v.dim()!=4:
+                #         v_ = []
+                #         for idx in range(v.shape[1]):
+                #             v_.append(F.interpolate(v[:,idx], size=interp_size, mode='bilinear'))
+                #         v = torch.cat(v_, dim=0)[None]
+                #     else:
+                #         v = F.interpolate(v, size=interp_size, mode='bilinear')
+                #     if k=='optical_flow':
+                #         v = v.permute(0, 2, 3, 1)
+                #     elif k=='sparse_motion':
+                #         v = v.permute(0, 1, 3, 4, 2)
+                #     motion_params[k] = v
+                # print(f"after: {motion_params[k].shape}")
+                # output_dict[k] = motion_params.get(k)
+            output_dict["deformed"], output_dict["optical_flow"] = self.deform_input(source_image512, motion_params['optical_flow'])
+            
         else:
             motion_params = None
         
-        out, warped = self.apply_optical(input_previous=None, input_skip=out, motion_params=motion_params)
-        for k, v in warped.items():
-            output_dict[k] = v
-
+        out, _ = self.apply_optical(input_previous=None, input_skip=out, motion_params=motion_params)
         out = self.bottleneck(out)
         
         for i in range(len(self.up_blocks)):
@@ -170,10 +165,8 @@ class Generator(nn.Module):
         out = self.final(out) # B, 3, H, W
         out = F.sigmoid(out)
         if self.skips:
-            out, warped = self.apply_optical(input_skip=source_image512, input_previous=out, motion_params=motion_params)
-
-        for k, v in warped.items():
-            output_dict[k] = v
+            out, occlusion_map = self.apply_optical(input_skip=source_image512, input_previous=out, motion_params=motion_params)
+        output_dict['occlusion_map'] = occlusion_map
         output_dict["prediction"] = out
 
         return output_dict
