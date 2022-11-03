@@ -22,6 +22,8 @@ from augmentation import AllAugmentationTransform
 import glob
 from functools import partial
 
+from PIL import Image
+import cv2
 
 def read_video(name, frame_shape):
     """
@@ -79,11 +81,15 @@ class FramesDataset(Dataset):
       - folder with all frames
     """
 
-    def __init__(self, root_dir, frame_shape=(256, 256, 3), id_sampling=False, is_train=True,
+    def __init__(self, root_dir, img_frame_shape=(256, 256, 3), structure_frame_shape=(128,128,3), structure=False, id_sampling=False, is_train=True,
                  random_seed=0, pairs_list=None, augmentation_params=None):
         self.root_dir = root_dir
         self.videos = os.listdir(root_dir)
-        self.frame_shape = frame_shape
+        self.frame_shape = img_frame_shape
+        self.structure_shape = structure_frame_shape
+        self.structure = structure
+        self.edge_filter = partial(cv2.edgePreservingFilter, flags=cv2.RECURS_FILTER, sigma_s=100, sigma_r=0.7)
+        
         self.pairs_list = pairs_list
         self.id_sampling = id_sampling
         if os.path.exists(os.path.join(root_dir, 'train')):
@@ -116,74 +122,62 @@ class FramesDataset(Dataset):
     def __len__(self):
         return len(self.videos)
 
+    def to_structure(self, img):
+        # structure_images = []
+
+        # for img in imgs:    
+        img = (img * 255).astype(np.uint8)
+        img = img[..., ::-1] # RGB -> BGR
+        if self.structure:
+            img = cv2.resize(img, (128, 128))
+        img = self.edge_filter(img)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # BGR -> RGB
+        # structure_images.append(img_as_float32(img))
+        return img_as_float32(img)
+
     def __getitem__(self, idx):
         if self.is_train and self.id_sampling:
             # TODO: Use two different images (original: Two frames from the same video)
-            video_ids = np.random.choice(len(self.videos), size=2, replace=False)
-            path = [os.path.join(self.root_dir, self.videos[idx]) for idx in video_ids]
-
-            # name = self.videos[idx]
-            # try:
-                # path = np.random.choice(glob.glob(os.path.join(self.root_dir, name + '*.mp4')))
-            # except ValueError:
-                # raise ValueError("File formatting is not correct for id_sampling=True. "
-                                #  "Change file formatting, or set id_sampling=False.")
+            # video_ids = np.random.choice(len(self.videos), size=2, replace=False)
+            # path = [os.path.join(self.root_dir, self.videos[idx]) for idx in video_ids]
+            name = self.videos[idx]
+            try:
+                path = np.random.choice(glob.glob(os.path.join(self.root_dir, name + '*.mp4')))
+            except ValueError:
+                raise ValueError("File formatting is not crrect for id_sampling=True. "
+                                "Change file formatting, or set id_sampling=False.")
         else:
-            # TODO: Use two different images (original: Two frames from the same video)
-            video_ids = np.random.choice(len(self.videos), size=2, replace=False)
-            path = [os.path.join(self.root_dir, self.videos[idx]) for idx in video_ids]
-
-            # name = self.videos[idx]
-            # path = os.path.join(self.root_dir, name)
+            name = self.videos[idx]
+            path = os.path.join(self.root_dir, name)
         video_name = os.path.basename(path[0])
 
         if self.is_train and os.path.isdir(path[0]):
+            frames = os.listdir(path)
+            num_frames = len(frames)
+            frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2))
 
-            # frames = os.listdir(path)
-            # num_frames = len(frames)
-            # frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2))
-            # if self.frame_shape is not None:
-            #     resize_fn = partial(resize, output_shape=self.frame_shape)
-            # else:
-            #     resize_fn = img_as_float32
+            if self.frame_shape is not None:
+                resize_fn = partial(resize, output_shape=self.frame_shape)
+            else:
+                resize_fn = img_as_float32
+                
 
-            # if type(frames[0]) is bytes:
-            #     video_array = [resize_fn(io.imread(os.path.join(path, frames[idx].decode('utf-8')))) for idx in
-            #                    frame_idx]
-            # else:
-            #     video_array = [resize_fn(io.imread(os.path.join(path, frames[idx]))) for idx in frame_idx]
-            # TODO: Replace frame_idx with path
-            video_array = []
+            if self.structure_shape is not None:
+                resize_str_fn = partial(resize, output_shape=self.structure_shape)
+            else:
+                resize_str_fn = img_as_float32
+
+            if type(frames[0]) is bytes:
+                video_array = [io.imread(os.path.join(path, frames[idx].decode('utf-8'))) for idx in frame_idx]
+            else:
+                video_array = [io.imread(os.path.join(path, frames[idx])) for idx in frame_idx]
             
-            for video_path in path:
-                frames = os.listdir(video_path)
-                num_frames = len(frames)
-                frame_idx = np.random.choice(num_frames)
-                if self.frame_shape is not None:
-                    resize_fn = partial(resize, output_shape=self.frame_shape)
-                else:
-                    resize_fn = img_as_float32
-                if type(frames[0]) is bytes:
-                    vid = resize_fn(io.imread(os.path.join(video_path, frames[frame_idx].decode('utf-8'))))
-                else:
-                    vid = resize_fn(io.imread(os.path.join(video_path, frames[frame_idx])))
-                video_array.append(vid)
-            video_array = np.stack(video_array)
-            
+            video_array = [resize_fn(img) for img in video_array]
 
         else:
-            # TODO: Replace frame_idx with path
-            video_array = []
-            for video_path in path:
-                vid = read_video(video_path, frame_shape=self.frame_shape)
-                video_array.append(vid)
-            video_array = np.stack(video_array)
-            
-            # video_array = read_video(path, frame_shape=self.frame_shape)
-            # num_frames = len(video_array)
-            # frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2)) if self.is_train else range(
-            #     num_frames) # if img, source=driving
-
+            video_array = read_video(path, frame_shape=self.frame_shape)
+            num_frames = len(video_array)
+            frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2)) if self.is_train else range(num_frames)
             video_array = video_array[frame_idx][..., :3]
 
         if self.transform is not None:
@@ -193,8 +187,11 @@ class FramesDataset(Dataset):
         if self.is_train:
             source = np.array(video_array[0], dtype='float32')
             driving = np.array(video_array[1], dtype='float32')
-            out['driving'] = driving.transpose((2, 0, 1))
-            out['source'] = source.transpose((2, 0, 1))
+            out['driving'] = driving.transpose((2, 0, 1)) # h, w, 3 -> 3, h, w
+            out['source'] = source.transpose((2, 0, 1)) # h, w, 3 -> 3, h, w
+            if self.structure:
+                out['driving_structure'] = self.to_structure(resize_str_fn(driving)).transpose((2, 0, 1)) # h, w, 3 -> 3, h, w
+                out['source_structure'] = self.to_structure(resize_str_fn(source)).transpose((2, 0, 1)) # h, w, 3 -> 3, h, w
         else:
             video = np.array(video_array, dtype='float32')
             out['video'] = video.transpose((3, 0, 1, 2))

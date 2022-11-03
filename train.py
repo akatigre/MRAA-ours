@@ -9,6 +9,7 @@ In no event will Snap Inc. be liable for any damages or losses of any kind arisi
 
 from tqdm import trange
 import torch
+import wandb
 from torch.utils.data import DataLoader
 from logger import Logger
 from modules.model import ReconstructionModel
@@ -16,8 +17,8 @@ from torch.optim.lr_scheduler import MultiStepLR
 from sync_batchnorm import DataParallelWithCallback
 from frames_dataset import DatasetRepeater
 
-
 def train(config, generator, region_predictor, bg_predictor, checkpoint, log_dir, dataset, device_ids):
+    wandb.init(name=log_dir, group='joint optim')
     train_params = config['train_params']
 
     optimizer = torch.optim.Adam(list(generator.parameters()) +
@@ -50,7 +51,7 @@ def train(config, generator, region_predictor, bg_predictor, checkpoint, log_dir
         pbar = trange(start_epoch, train_params['num_epochs'])
         for epoch in pbar:
             for x in dataloader:
-                losses, generated = model(x)
+                losses, generated = model(x) # x: source, source_structure, driving, driving_structure, name, id
                 loss_values = [val.mean() for val in losses.values()]
                 loss = sum(loss_values)
                 loss.backward()
@@ -61,8 +62,8 @@ def train(config, generator, region_predictor, bg_predictor, checkpoint, log_dir
                 pbar.set_description(" ".join([f"{key}: {value:.2f} " for key, value in losses.items()]))
 
             scheduler.step()
-            
             logger.log_epoch(epoch, {'generator': generator,
                                      'bg_predictor': bg_predictor,
                                      'region_predictor': region_predictor,
                                      'optimizer_reconstruction': optimizer}, inp=x, out=generated)
+    wandb.finish()

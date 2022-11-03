@@ -6,7 +6,8 @@ Such code is provided as-is, without warranty of any kind, express or implied, i
 title, fitness for a particular purpose, non-infringement, or that such code is free of defects, errors or viruses.
 In no event will Snap Inc. be liable for any damages or losses of any kind arising from the sample code or your use thereof.
 """
-
+import warnings 
+warnings.filterwarnings("ignore")
 import matplotlib
 
 matplotlib.use('Agg')
@@ -55,7 +56,7 @@ if __name__ == "__main__":
         log_dir = os.path.join(*os.path.split(opt.checkpoint)[:-1])
     else:
         log_dir = os.path.join(opt.log_dir, os.path.basename(opt.config).split('.')[0])
-        log_dir += ' ' + strftime("%d_%m_%y_%H.%M.%S", gmtime())
+
 
     generator = Generator(num_regions=config['model_params']['num_regions'],
                           num_channels=config['model_params']['num_channels'],

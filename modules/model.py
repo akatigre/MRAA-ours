@@ -12,10 +12,15 @@ import torch
 import torch.nn.functional as F
 from modules.util import AntiAliasInterpolation2d, make_coordinate_grid
 from torchvision import models
-
+from torchvision.utils import save_image
+from skimage.transform import resize
+from skimage import img_as_float32
+from functools import partial
 import numpy as np
 from torch.autograd import grad
-
+import torchvision
+import imageio
+import cv2
 
 class Vgg19(torch.nn.Module):
     """
@@ -162,33 +167,36 @@ class ReconstructionModel(torch.nn.Module):
                 self.vgg = self.vgg.cuda()
 
     def forward(self, x):
-        source_region_params = self.region_predictor(x['source'])
-        driving_region_params = self.region_predictor(x['driving'])
-
-        bg_params = self.bg_predictor(x['source'], x['driving'])
-        generated = self.generator(x['source'], source_region_params=source_region_params,
+        
+        #! Stage 1
+        source_region_params = self.region_predictor(x['source_structure'])
+        driving_region_params = self.region_predictor(x['driving_structure'])
+        bg_params = self.bg_predictor(x['source_structure'], x['driving_structure']) 
+        generated = self.generator(x['source_structure'], x['source'], source_region_params=source_region_params,
                                    driving_region_params=driving_region_params, bg_params=bg_params)
+        # occlusion_map, optical_flow, prediction, deformed
         generated.update({'source_region_params': source_region_params, 'driving_region_params': driving_region_params})
 
+        # Stage 1 Update Structure model
         loss_values = {}
 
-        pyramide_real = self.pyramid(x['driving'])
-        pyramide_generated = self.pyramid(generated['prediction'])
+        pyramide_real = self.pyramid(x['driving_structure'])
+        pyramide_generated = self.pyramid(generated['prediction_structure'])
 
-        if sum(self.loss_weights['perceptual']) != 0:
+        if sum(self.loss_weights['perceptual_structure']) != 0:
             value_total = 0
             for scale in self.scales:
                 x_vgg = self.vgg(pyramide_generated['prediction_' + str(scale)])
                 y_vgg = self.vgg(pyramide_real['prediction_' + str(scale)])
 
-                for i, weight in enumerate(self.loss_weights['perceptual']):
+                for i, weight in enumerate(self.loss_weights['perceptual_structure']):
                     value = torch.abs(x_vgg[i] - y_vgg[i].detach()).mean()
-                    value_total += self.loss_weights['perceptual'][i] * value
-                loss_values['perceptual'] = value_total
+                    value_total += weight * value
+                loss_values['perceptual_structure'] = value_total # loss_values['perceptual'] -> loss_values['perceptual_structure']
 
         if (self.loss_weights['equivariance_shift'] + self.loss_weights['equivariance_affine']) != 0:
-            transform = Transform(x['driving'].shape[0], **self.train_params['transform_params'])
-            transformed_frame = transform.transform_frame(x['driving']) # batch_size, n_channels, H, W
+            transform = Transform(x['driving_structure'].shape[0], **self.train_params['transform_params'])
+            transformed_frame = transform.transform_frame(x['driving_structure']) # batch_size, n_channels, H, W
             transformed_region_params = self.region_predictor(transformed_frame)
             
             generated['transformed_frame'] = transformed_frame
@@ -215,5 +223,18 @@ class ReconstructionModel(torch.nn.Module):
 
                 value = torch.abs(eye - value).mean()
                 loss_values['equivariance_affine'] = self.loss_weights['equivariance_affine'] * value
+        
+        #! Stage 2: Note that structure, of, om has been excluded from gradient computation
+        pyramide_real = self.pyramid(x['driving'])
+        pyramide_generated = self.pyramid(generated['prediction'])
+        if sum(self.loss_weights['perceptual']) != 0:
+            value_total = 0
+            for scale in self.scales:
+                x_vgg = self.vgg(pyramide_generated['prediction_' + str(scale)])
+                y_vgg = self.vgg(pyramide_real['prediction_' + str(scale)])
 
+                for i, weight in enumerate(self.loss_weights['perceptual']):
+                    value = torch.abs(x_vgg[i] - y_vgg[i].detach()).mean()
+                    value_total += weight * value
+                loss_values['perceptual'] = value_total # loss_values['perceptual']
         return loss_values, generated

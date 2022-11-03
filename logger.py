@@ -13,11 +13,12 @@ import torch.nn.functional as F
 import imageio
 
 import os
-from skimage.draw import disk
+from skimage.draw import circle
 
 import matplotlib.pyplot as plt
 import collections
-
+import cv2
+import wandb
 
 class Logger:
     def __init__(self, log_dir, checkpoint_freq=100, visualizer_params=None, zfill_num=8, log_file_name='log.txt',
@@ -40,7 +41,7 @@ class Logger:
 
     def log_scores(self, loss_names):
         loss_mean = np.array(self.loss_list).mean(axis=0)
-
+        wandb.log({name: value for name, value in zip(loss_names, loss_mean)}, step=self.epoch)
         loss_string = "; ".join(["%s - %.5f" % (name, value) for name, value in zip(loss_names, loss_mean)])
         loss_string = str(self.epoch).zfill(self.zfill_num) + ") " + loss_string
 
@@ -52,6 +53,7 @@ class Logger:
         image = self.visualizer.visualize(inp['driving'], inp['source'], out)
         path = os.path.join(self.visualizations_dir,
                             "%s-" % str(self.epoch).zfill(self.zfill_num) + self.train_mode + '.png')
+        wandb.log({'Reconstruction': wandb.Image(image)})
         imageio.imsave(path, image)
 
     def save_cpk(self, emergent=False):
@@ -146,7 +148,7 @@ class Visualizer:
         kp_array = spatial_size * (kp_array + 1) / 2
         num_regions = kp_array.shape[0]
         for kp_ind, kp in enumerate(kp_array):
-            rr, cc = disk((kp[1], kp[0]), self.kp_size, shape=image.shape[:2])
+            rr, cc = circle(kp[1], kp[0], self.kp_size, shape=image.shape[:2])
             image[rr, cc] = np.array(self.colormap(kp_ind / num_regions))[:3]
         return image
 
@@ -165,10 +167,28 @@ class Visualizer:
         out = []
         for arg in args:
             if type(arg) == tuple:
-                out.append(self.create_image_column_with_kp(arg[0], arg[1]))
+                img = self.create_image_column_with_kp(arg[0], arg[1])
             else:
-                out.append(self.create_image_column(arg))
+                img = self.create_image_column(arg)
+            out.append(img)
         return np.concatenate(out, axis=1)
+    
+    def create_optical_flow(self, flow):
+        """
+        flow: b, h, w, 2
+        """
+        of = []
+        shape = list(flow.shape[:-1]) + [3]
+        hsv = np.zeros(shape, dtype=np.uint8)
+        hsv[..., 1] = 255
+        flow = flow.permute(0, 3, 1, 2).numpy() # b, 2, h, w
+
+        for idx, f in enumerate(flow):
+            mag, ang = cv2.cartToPolar(f[0, ...], f[1, ...])
+            hsv[idx, ..., 0] = ang * 180/ np.pi / 2
+            hsv[idx, ..., 2] = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
+            of.append(cv2.cvtColor(hsv[idx], cv2.COLOR_HSV2BGR))
+        return np.stack(of)/255
 
     def visualize(self, driving, source, out):
         images = []
@@ -180,11 +200,11 @@ class Visualizer:
         images.append((source, source_region_params))
 
         # Equivariance visualization
-        if 'transformed_frame' in out:
-            transformed = out['transformed_frame'].data.cpu().numpy()
-            transformed = np.transpose(transformed, [0, 2, 3, 1])
-            transformed_kp = out['transformed_region_params']['shift'].data.cpu().numpy()
-            images.append((transformed, transformed_kp))
+        # if 'transformed_frame' in out:
+        #     transformed = out['transformed_frame'].data.cpu().numpy()
+        #     transformed = np.transpose(transformed, [0, 2, 3, 1])
+        #     transformed_kp = out['transformed_region_params']['shift'].data.cpu().numpy()
+        #     images.append((transformed, transformed_kp))
 
         # Driving image with region centers
         driving_region_params = out['driving_region_params']['shift'].data.cpu().numpy()
@@ -193,12 +213,17 @@ class Visualizer:
         images.append((driving, driving_region_params))
 
         # Deformed image
-        if 'deformed' in out:
-            deformed = out['deformed'].data.cpu().numpy()
-            deformed = np.transpose(deformed, [0, 2, 3, 1])
-            images.append(deformed)
+        # if 'deformed' in out:
+        #     deformed = out['deformed'].data.cpu().numpy()
+        #     deformed = np.transpose(deformed, [0, 2, 3, 1])
+        #     images.append(deformed)
 
         # Result
+        prediction = out['prediction_structure'].data.cpu()
+        prediction = F.interpolate(prediction, size=source.shape[1:3]).numpy()
+        prediction = np.transpose(prediction, [0, 2, 3, 1])
+        images.append(prediction)
+
         prediction = out['prediction'].data.cpu().numpy()
         prediction = np.transpose(prediction, [0, 2, 3, 1])
         images.append(prediction)
@@ -207,6 +232,9 @@ class Visualizer:
         if 'occlusion_map' in out:
             occlusion_map = out['occlusion_map'].data.cpu().repeat(1, 3, 1, 1)
             occlusion_map = F.interpolate(occlusion_map, size=source.shape[1:3]).numpy()
+            if 'optical_flow' in out:
+                optical_flow = self.create_optical_flow(out['optical_flow'].data.cpu())
+                images.append(optical_flow)
             occlusion_map = np.transpose(occlusion_map, [0, 2, 3, 1])
             images.append(occlusion_map)
 
@@ -221,6 +249,7 @@ class Visualizer:
             source_heatmap = np.transpose(source_heatmap.data.cpu().numpy(), [0, 2, 3, 1])
             images.append(draw_colored_heatmap(source_heatmap, self.colormap, self.region_bg_color))
 
+       
         image = self.create_image_grid(*images)
         image = (255 * image).astype(np.uint8)
         return image

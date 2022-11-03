@@ -5,13 +5,10 @@
 #title, fitness for a particular purpose, non-infringement, or that such code is free of defects, errors or viruses.
 #In no event will Snap Inc. be liable for any damages or losses of any kind arising from the sample code or your use thereof.
 
-# region predictor input shape
-# input torch shape : 1, 3, 256, 256
-# Output torch shape : 1, 3, 29
 
 dataset_params:
-  root_dir: ../ted
-  frame_shape: [64,64,3]
+  root_dir: ../prepare_data/taichi
+  frame_shape: null
   id_sampling: True
   pairs_list: null
   augmentation_params:
@@ -29,7 +26,6 @@ model_params:
   num_channels: 3
   estimate_affine: True
   revert_axis_swap: True
-
   bg_predictor_params:
     block_expansion: 32
     max_features: 1024
@@ -40,8 +36,8 @@ model_params:
     block_expansion: 32
     max_features: 1024
     scale_factor: 0.25
-    num_blocks: 3
-    pca_based: True
+    num_blocks: 5
+    pca_based: False
     pad: 0
     fast_svd: False
   generator_params:
@@ -53,7 +49,7 @@ model_params:
     pixelwise_flow_predictor_params:
       block_expansion: 64
       max_features: 1024
-      num_blocks: 3
+      num_blocks: 5
       scale_factor: 0.25
       use_deformed_source: True
       use_covar_heatmap: True
@@ -67,9 +63,9 @@ train_params:
   num_repeats: 150
   epoch_milestones: [60, 90]
   lr: 2.0e-4
-  batch_size: 34
+  batch_size: 14
   dataloader_workers: 6
-  checkpoint_freq: 1
+  checkpoint_freq: 50
   scales: [1, 0.5, 0.25, 0.125]
   transform_params:
     sigma_affine: 0.05

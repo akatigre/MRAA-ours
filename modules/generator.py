@@ -19,7 +19,7 @@ class Generator(nn.Module):
     Generator that given source image and region parameters try to transform image according to movement trajectories
     induced by region parameters. Generator follows Johnson architecture.
     """
-
+    #! add a case where reconstructed structure is added
     def __init__(self, num_channels, num_regions, block_expansion, max_features, num_down_blocks,
                  num_bottleneck_blocks,  dataset=None, pixelwise_flow_predictor_params=None, skips=False, revert_axis_swap=True):
         super(Generator, self).__init__()
@@ -40,12 +40,28 @@ class Generator(nn.Module):
             down_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
         self.down_blocks = nn.ModuleList(down_blocks)
 
+
+        down_blocks = []
+        self.first2 = SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))
+        for i in range(num_down_blocks):
+            in_features = min(max_features, block_expansion * (2 ** i))
+            out_features = min(max_features, block_expansion * (2 ** (i + 1)))
+            down_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
+        self.down_blocks2 = nn.ModuleList(down_blocks)
+
         up_blocks = []
         for i in range(num_down_blocks):
             in_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i)))
             out_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i - 1)))
             up_blocks.append(UpBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
         self.up_blocks = nn.ModuleList(up_blocks)
+        
+        up_blocks = []
+        for i in range(num_down_blocks):
+            in_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i)))
+            out_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i - 1)))
+            up_blocks.append(UpBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
+        self.up_blocks2 = nn.ModuleList(up_blocks)
 
         self.bottleneck = torch.nn.Sequential()
         in_features = min(max_features, block_expansion * (2 ** num_down_blocks))
@@ -53,6 +69,7 @@ class Generator(nn.Module):
             self.bottleneck.add_module('r' + str(i), ResBlock2d(in_features, kernel_size=(3, 3), padding=(1, 1)))
 
         self.final = nn.Conv2d(block_expansion, num_channels, kernel_size=(7, 7), padding=(3, 3))
+        self.final2 = nn.Conv2d(block_expansion, num_channels, kernel_size=(7, 7), padding=(3, 3))
         self.num_channels = num_channels
         self.skips = skips
         if dataset is not None:
@@ -85,28 +102,21 @@ class Generator(nn.Module):
                 if input_skip.shape[2] != occlusion_map.shape[2] or input_skip.shape[3] != occlusion_map.shape[3]:
                     occlusion_map = F.interpolate(occlusion_map, size=input_skip.shape[2:], mode='bilinear')
                 if input_previous is not None:
-                    # if input_skip.shape[1]==3:
-                    #     warped['input_skip'] = input_skip # deformed source
-                    #     warped['input_previous'] = input_previous # deformed & occluded from previous
-                        
                     input_skip = input_skip * occlusion_map + input_previous * (1 - occlusion_map)
-                    # if input_skip.shape[1]==3:
-                    #     warped['input_occluded'] = input_skip
                 else:
                     input_skip = input_skip * occlusion_map
+                    
             out = input_skip
         else:
             out = input_previous if input_previous is not None else input_skip
         return out, occlusion_map
 
-    def forward(self, source_image256, source_image512, driving_region_params, source_region_params, bg_params=None):
-        # gt_source_shape = source_image256.shape[-1]
-        # real_source_shape = source_image512.shape[-1]
-        out = self.first(source_image512) # torch.Size([1, 64, 512, 512])
+    def forward(self, source_structure, source_image, driving_region_params=None, source_region_params=None, bg_params=None):
+        #! Jointly Optimizing Stage 1 & Stage 2
+        # TODO Stage 1
+        out = self.first(source_structure) # source_struc
         skips = [out]
         for i in range(len(self.down_blocks)):
-            # torch.Size([1, 128, 256, 256])
-            # torch.Size([1, 256, 128, 128])
             out = self.down_blocks[i](out)
             skips.append(out)
 
@@ -114,44 +124,11 @@ class Generator(nn.Module):
 
         if self.pixelwise_flow_predictor is not None:
             
-            motion_params = self.pixelwise_flow_predictor(source_image=source_image256,
-                                                          driving_region_params=driving_region_params,
-                                                          source_region_params=source_region_params,
-                                                          bg_params=bg_params)
-            
-            #! 뭔가 이상한데...?
-            # for k in ['optical_flow', 'occlusion_map', 'sparse_motion']:
-                # sparse_motion: torch.Size([1, 11, 64, 64, 2])
-                # optical_flow: torch.Size([1, 64, 64, 2])
-                # occlusion_map: torch.Size([1, 1, 64, 64])
-                # print(f"before: {motion_params[k].shape}")
-                # if gt_source_shape != real_source_shape:
-                #     if k=='optical_flow':
-                #         v = motion_params[k].permute(0, 3, 1, 2)
-                #     elif k=='sparse_motion':
-                #         v = motion_params[k].permute(0, 1, 4, 2, 3)
-                #     else:
-                #         v = motion_params[k]
-                #     interp_size = (512//4, 512//4)
-                #     if v.dim()!=4:
-                #         v_ = []
-                #         for idx in range(v.shape[1]):
-                #             v_.append(F.interpolate(v[:,idx], size=interp_size, mode='bilinear'))
-                #         v = torch.cat(v_, dim=0)[None]
-                #     else:
-                #         v = F.interpolate(v, size=interp_size, mode='bilinear')
-                #     if k=='optical_flow':
-                #         v = v.permute(0, 2, 3, 1)
-                #     elif k=='sparse_motion':
-                #         v = v.permute(0, 1, 3, 4, 2)
-                #     motion_params[k] = v
-                # print(f"after: {motion_params[k].shape}")
-                # output_dict[k] = motion_params.get(k)
-            output_dict["deformed"], output_dict["optical_flow"] = self.deform_input(source_image512, motion_params['optical_flow'])
-            
-        else:
-            motion_params = None
-        
+            motion_params = self.pixelwise_flow_predictor(source_image=source_structure,
+                                                        driving_region_params=driving_region_params,
+                                                        source_region_params=source_region_params,
+                                                        bg_params=bg_params)
+        output_dict["deformed_structure"], output_dict["optical_flow"] = self.deform_input(source_structure, motion_params['optical_flow'])
         out, _ = self.apply_optical(input_previous=None, input_skip=out, motion_params=motion_params)
         out = self.bottleneck(out)
         
@@ -164,9 +141,30 @@ class Generator(nn.Module):
             out, _ = self.apply_optical(input_skip=skips[0], input_previous=out, motion_params=motion_params)
         out = self.final(out) # B, 3, H, W
         out = F.sigmoid(out)
-        if self.skips:
-            out, occlusion_map = self.apply_optical(input_skip=source_image512, input_previous=out, motion_params=motion_params)
-        output_dict['occlusion_map'] = occlusion_map
-        output_dict["prediction"] = out
 
+        if self.skips:
+            output_dict["prediction_structure"], output_dict['occlusion_map'] = self.apply_optical(input_skip=source_structure, input_previous=out, motion_params=motion_params)  
+        
+        # TODO Stage 2
+        out = self.first2(source_image)
+        skips = [out]
+        for i, down_block in enumerate(self.down_blocks2):
+            out = down_block(out)
+            skips.append(out)
+
+        output_dict['deformed'], output_dict['optical_flow'] = self.deform_input(source_image, output_dict['optical_flow'])
+        
+        for i, up_block in enumerate(self.up_blocks2):
+            if self.skips:
+                out, _ = self.apply_optical(input_skip=skips[-(i + 1)], input_previous=out, motion_params=motion_params)
+            out = up_block(out)
+        if self.skips:
+            out, _ = self.apply_optical(input_skip=skips[0], input_previous=out, motion_params=motion_params) 
+        out = self.final2(out)
+        out = F.sigmoid(out)
+
+        if self.skips:
+            out, output_dict['occlusion_map'] = self.apply_optical(input_skip=source_image, input_previous=out, motion_params=motion_params)
+        output_dict["prediction"] = out
+        
         return output_dict

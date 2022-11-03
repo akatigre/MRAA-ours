@@ -9,7 +9,7 @@
 dataset_params:
   root_dir: ../prepare_data/TED-talks
   frame_shape: [384, 384]
-  id_sampling: False
+  id_sampling: True
   pairs_list: null
   augmentation_params:
     flip_param:

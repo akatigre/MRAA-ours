@@ -49,8 +49,7 @@ class RegionPredictor(nn.Module):
         else:
             self.jacobian = None
 
-        # self.temperature = temperature
-        self.temperature = 0.01
+        self.temperature = temperature
         self.scale_factor = scale_factor
         self.pca_based = pca_based
         self.fast_svd = fast_svd

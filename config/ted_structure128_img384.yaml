@@ -7,8 +7,10 @@
 
 
 dataset_params:
-  root_dir: ../taichi
-  frame_shape: [64,64,3]
+  root_dir: ../prepare_data/TED-talks
+  structure: True
+  img_frame_shape: [384, 384]
+  structure_frame_shape: [128, 128]
   id_sampling: True
   pairs_list: null
   augmentation_params:
@@ -26,17 +28,18 @@ model_params:
   num_channels: 3
   estimate_affine: True
   revert_axis_swap: True
+
   bg_predictor_params:
     block_expansion: 32
     max_features: 1024
-    num_blocks: 3
+    num_blocks: 5
     bg_type: 'affine'
   region_predictor_params:
     temperature: 0.1
     block_expansion: 32
     max_features: 1024
     scale_factor: 0.25
-    num_blocks: 3
+    num_blocks: 5
     pca_based: True
     pad: 0
     fast_svd: False
@@ -49,7 +52,7 @@ model_params:
     pixelwise_flow_predictor_params:
       block_expansion: 64
       max_features: 1024
-      num_blocks: 3
+      num_blocks: 5
       scale_factor: 0.25
       use_deformed_source: True
       use_covar_heatmap: True
@@ -57,13 +60,13 @@ model_params:
   avd_network_params:
     id_bottle_size: 64
     pose_bottle_size: 64
-
+    
 train_params:
   num_epochs: 100
   num_repeats: 150
   epoch_milestones: [60, 90]
   lr: 2.0e-4
-  batch_size: 34
+  batch_size: 16
   dataloader_workers: 6
   checkpoint_freq: 1
   scales: [1, 0.5, 0.25, 0.125]
@@ -72,6 +75,7 @@ train_params:
     sigma_tps: 0.005
     points_tps: 5
   loss_weights:
+    perceptual_structure: [10, 10, 10, 10, 10]
     perceptual: [10, 10, 10, 10, 10]
     equivariance_shift: 10
     equivariance_affine: 10
@@ -98,7 +102,7 @@ animate_params:
   mode: 'avd'
 
 visualizer_params:
-  kp_size: 5
+  kp_size: 3
   draw_border: True
   colormap: 'gist_rainbow'
   region_bg_color: [1, 1, 1]
