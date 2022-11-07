@@ -55,6 +55,11 @@ class Logger:
                             "%s-" % str(self.epoch).zfill(self.zfill_num) + self.train_mode + '.png')
         wandb.log({'Reconstruction': wandb.Image(image)})
         imageio.imsave(path, image)
+    
+    def update_wandb(self, inp, out):
+        image = self.visualizer.visualize(inp['driving'], inp['source'], out)
+        wandb.log({'Reconstruction': wandb.Image(image)})
+
 
     def save_cpk(self, emergent=False):
         cpk = {k: v.state_dict() for k, v in self.models.items()}

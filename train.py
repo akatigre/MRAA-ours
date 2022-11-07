@@ -20,6 +20,8 @@ from frames_dataset import DatasetRepeater
 def train(config, generator, region_predictor, bg_predictor, checkpoint, log_dir, dataset, device_ids):
     wandb.init(name=log_dir, group='joint optim')
     train_params = config['train_params']
+    
+    scaler = torch.cuda.amp.GradScaler()
 
     optimizer = torch.optim.Adam(list(generator.parameters()) +
                                  list(region_predictor.parameters()) +
@@ -50,7 +52,7 @@ def train(config, generator, region_predictor, bg_predictor, checkpoint, log_dir
                 checkpoint_freq=train_params['checkpoint_freq']) as logger:
         pbar = trange(start_epoch, train_params['num_epochs'])
         for epoch in pbar:
-            for x in dataloader:
+            for iter, x in enumerate(dataloader):
                 losses, generated = model(x) # x: source, source_structure, driving, driving_structure, name, id
                 loss_values = [val.mean() for val in losses.values()]
                 loss = sum(loss_values)
@@ -60,7 +62,9 @@ def train(config, generator, region_predictor, bg_predictor, checkpoint, log_dir
                 losses = {key: value.mean().detach().data.cpu().numpy() for key, value in losses.items()}
                 logger.log_iter(losses=losses)
                 pbar.set_description(" ".join([f"{key}: {value:.2f} " for key, value in losses.items()]))
-
+                if iter % 100 == 0:
+                    logger.update_wandb(inp=x, out=generated)
+            
             scheduler.step()
             logger.log_epoch(epoch, {'generator': generator,
                                      'bg_predictor': bg_predictor,
