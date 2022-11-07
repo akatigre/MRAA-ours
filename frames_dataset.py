@@ -81,13 +81,15 @@ class FramesDataset(Dataset):
       - folder with all frames
     """
 
-    def __init__(self, root_dir, img_frame_shape=(256, 256, 3), structure_frame_shape=(128,128,3), structure=False, id_sampling=False, is_train=True,
+    def __init__(self, root_dir, structure_root_dir, img_frame_shape=(256, 256, 3), structure_frame_shape=(128,128,3),id_sampling=False, is_train=True,
                  random_seed=0, pairs_list=None, augmentation_params=None):
         self.root_dir = root_dir
+        
+        self.structure_root_dir = structure_root_dir
         self.videos = os.listdir(root_dir)
+        self.structure_videos = os.listdir(structure_root_dir)
         self.frame_shape = img_frame_shape
         self.structure_shape = structure_frame_shape
-        self.structure = structure
         self.edge_filter = partial(cv2.edgePreservingFilter, flags=cv2.RECURS_FILTER, sigma_s=100, sigma_r=0.7)
         
         self.pairs_list = pairs_list
@@ -99,10 +101,17 @@ class FramesDataset(Dataset):
                 train_videos = {os.path.basename(video).split('#')[0] for video in
                                 os.listdir(os.path.join(root_dir, 'train'))}
                 train_videos = list(train_videos)
+                train_structure_videos = {os.path.basename(video).split('#')[0] for video in
+                                os.listdir(os.path.join(structure_root_dir, 'train'))}
+                train_structure_videos = list(train_structure_videos)
             else:
                 train_videos = os.listdir(os.path.join(root_dir, 'train'))
+                train_structure_videos = os.listdir(os.path.join(structure_root_dir, 'train'))
             test_videos = os.listdir(os.path.join(root_dir, 'test'))
+            test_structure_videos = os.listdir(os.path.join(structure_root_dir, 'test'))
+
             self.root_dir = os.path.join(self.root_dir, 'train' if is_train else 'test')
+            self.structure_root_dir = os.path.join(self.structure_root_dir, 'train' if is_train else 'test')
         else:
             print("Use random train-test split.")
             train_videos, test_videos = train_test_split(self.videos, random_state=random_seed, test_size=0.2)
@@ -122,17 +131,13 @@ class FramesDataset(Dataset):
     def __len__(self):
         return len(self.videos)
 
-    def to_structure(self, img):
-        # structure_images = []
-
-        # for img in imgs:    
+    def to_structure(self, img): 
         img = (img * 255).astype(np.uint8)
         img = img[..., ::-1] # RGB -> BGR
         if self.structure:
             img = cv2.resize(img, (128, 128))
         img = self.edge_filter(img)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # BGR -> RGB
-        # structure_images.append(img_as_float32(img))
         return img_as_float32(img)
 
     def __getitem__(self, idx):
@@ -142,17 +147,25 @@ class FramesDataset(Dataset):
             # path = [os.path.join(self.root_dir, self.videos[idx]) for idx in video_ids]
             name = self.videos[idx]
             try:
-                path = np.random.choice(glob.glob(os.path.join(self.root_dir, name + '*.mp4')))
+                video_paths = glob.glob(os.path.join(self.root_dir, name + '*.mp4'))
+                num_videos = len(video_paths)
+                frame_idx = np.random.choice(num_videos)
+                path = sorted(video_paths)[frame_idx]
+                structure_paths = glob.glob(os.path.join(self.structure_root_dir, name + '*.mp4'))
+                assert len(video_paths) == len(structure_paths), f"structure not saved in {name}"
+                structure_path = sorted(structure_paths)[frame_idx]
             except ValueError:
                 raise ValueError("File formatting is not crrect for id_sampling=True. "
                                 "Change file formatting, or set id_sampling=False.")
         else:
             name = self.videos[idx]
             path = os.path.join(self.root_dir, name)
+            structure_path = os.path.join(self.structure_root_dir, name)
         video_name = os.path.basename(path[0])
 
         if self.is_train and os.path.isdir(path[0]):
             frames = os.listdir(path)
+            
             num_frames = len(frames)
             frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2))
 
@@ -169,32 +182,41 @@ class FramesDataset(Dataset):
 
             if type(frames[0]) is bytes:
                 video_array = [io.imread(os.path.join(path, frames[idx].decode('utf-8'))) for idx in frame_idx]
+                video_structure_array = [io.imread(os.path.join(structure_path, frames[idx].decode('utf-8'))) for idx in frame_idx]
             else:
                 video_array = [io.imread(os.path.join(path, frames[idx])) for idx in frame_idx]
+                video_structure_array = [io.imread(os.path.join(structure_path, frames[idx])) for idx in frame_idx]
             
             video_array = [resize_fn(img) for img in video_array]
+            video_structure_array = [resize_str_fn(img) for img in video_structure_array]
 
         else:
             video_array = read_video(path, frame_shape=self.frame_shape)
             num_frames = len(video_array)
             frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2)) if self.is_train else range(num_frames)
             video_array = video_array[frame_idx][..., :3]
+            video_structure_array = video_structure_array[frame_idx][..., :3]
 
         if self.transform is not None:
             video_array = self.transform(video_array)
+            video_structure_array = self.transform(video_structure_array)
 
         out = {}
         if self.is_train:
             source = np.array(video_array[0], dtype='float32')
             driving = np.array(video_array[1], dtype='float32')
-            out['driving'] = driving.transpose((2, 0, 1)) # h, w, 3 -> 3, h, w
             out['source'] = source.transpose((2, 0, 1)) # h, w, 3 -> 3, h, w
-            if self.structure:
-                out['driving_structure'] = self.to_structure(resize_str_fn(driving)).transpose((2, 0, 1)) # h, w, 3 -> 3, h, w
-                out['source_structure'] = self.to_structure(resize_str_fn(source)).transpose((2, 0, 1)) # h, w, 3 -> 3, h, w
+            out['driving'] = driving.transpose((2, 0, 1)) # h, w, 3 -> 3, h, w
+            
+            if self.structure_root_dir is not None:
+                out['source_structure'] = np.array(video_structure_array[0], dtype='float32').transpose((2, 0, 1))
+                out['driving_structure'] = np.array(video_structure_array[1], dtype='float32').transpose((2, 0, 1))
+                # out['driving_structure'] = self.to_structure(resize_str_fn(driving)).transpose((2, 0, 1)) # h, w, 3 -> 3, h, w
+                # out['source_structure'] = self.to_structure(resize_str_fn(source)).transpose((2, 0, 1)) # h, w, 3 -> 3, h, w
         else:
             video = np.array(video_array, dtype='float32')
             out['video'] = video.transpose((3, 0, 1, 2))
+            out['structure_video'] = np.array(video_structure_array, dtype='float32').transpose((3, 0, 1, 2))
 
         out['name'] = video_name
         out['id'] = idx

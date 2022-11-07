@@ -8,7 +8,7 @@
 
 dataset_params:
   root_dir: ../prepare_data/TED-talks
-  structure: True
+  structure_root_dir: ../prepare_data/TED-talks-structure-128 # None
   img_frame_shape: [384, 384]
   structure_frame_shape: [128, 128]
   id_sampling: True

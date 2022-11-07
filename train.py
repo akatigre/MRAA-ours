@@ -60,10 +60,9 @@ def train(config, generator, region_predictor, bg_predictor, checkpoint, log_dir
                 losses = {key: value.mean().detach().data.cpu().numpy() for key, value in losses.items()}
                 logger.log_iter(losses=losses)
                 pbar.set_description(" ".join([f"{key}: {value:.2f} " for key, value in losses.items()]))
-
             scheduler.step()
             logger.log_epoch(epoch, {'generator': generator,
-                                     'bg_predictor': bg_predictor,
-                                     'region_predictor': region_predictor,
-                                     'optimizer_reconstruction': optimizer}, inp=x, out=generated)
+                                    'bg_predictor': bg_predictor,
+                                    'region_predictor': region_predictor,
+                                    'optimizer_reconstruction': optimizer}, inp=x, out=generated)
     wandb.finish()
