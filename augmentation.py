@@ -89,13 +89,21 @@ def get_resize_sizes(im_h, im_w, size):
 
 
 class RandomFlip(object):
-    def __init__(self, time_flip=False, horizontal_flip=False):
+    def __init__(self, time_flip=False, horizontal_flip=False, structure=False):
         self.time_flip = time_flip
         self.horizontal_flip = horizontal_flip
+        self.structure = structure
 
     def __call__(self, clip):
         if random.random() < 0.5 and self.time_flip:
-            return clip[::-1]
+            if not self.structure:
+                return clip[::-1]
+            else:
+                img = clip[:2]
+                structure = clip[2:]
+                img = img[::-1]
+                structure = structure[::-1]
+                return img + structure
         if random.random() < 0.5 and self.horizontal_flip:
             return [np.fliplr(img) for img in clip]
 

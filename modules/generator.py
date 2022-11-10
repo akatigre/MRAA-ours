@@ -12,6 +12,7 @@ from torch import nn
 import torch.nn.functional as F
 from modules.util import ResBlock2d, SameBlock2d, UpBlock2d, DownBlock2d
 from modules.pixelwise_flow_predictor import PixelwiseFlowPredictor
+from modules.stage2_of import Stage2_OF
 from skimage.transform import resize
 
 class Generator(nn.Module):
@@ -21,7 +22,7 @@ class Generator(nn.Module):
     """
     #! add a case where reconstructed structure is added
     def __init__(self, num_channels, num_regions, block_expansion, max_features, num_down_blocks,
-                 num_bottleneck_blocks,  dataset=None, pixelwise_flow_predictor_params=None, skips=False, revert_axis_swap=True):
+                 num_bottleneck_blocks,  dataset=None, pixelwise_flow_predictor_params=None, stage2_of_params=None, skips=False, revert_axis_swap=True):
         super(Generator, self).__init__()
 
         if pixelwise_flow_predictor_params is not None:
@@ -30,6 +31,11 @@ class Generator(nn.Module):
                                                                    **pixelwise_flow_predictor_params)
         else:
             self.pixelwise_flow_predictor = None
+
+        if stage2_of_params is not None:
+            self.stage2_of_updater = Stage2_OF(num_regions=num_regions, num_channels=num_channels, revert_axis_swap=revert_axis_swap, **stage2_of_params)
+        else:
+            self.stage2_of_updater = None
 
         self.first = SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))
 
@@ -146,13 +152,19 @@ class Generator(nn.Module):
             output_dict["prediction_structure"], output_dict['occlusion_map'] = self.apply_optical(input_skip=source_structure, input_previous=out, motion_params=motion_params)  
         
         # TODO Stage 2
+        if self.stage2_of_updater is not None:
+            motion_params_stage2 = self.stage2_of_updater(source_image=source_image, 
+                                                   driving_region_params=driving_region_params,
+                                                   source_region_params=source_region_params,
+                                                   stage1_dict=motion_params,
+                                                   bg_params=bg_params)
         out = self.first2(source_image)
         skips = [out]
         for i, down_block in enumerate(self.down_blocks2):
             out = down_block(out)
             skips.append(out)
 
-        output_dict['deformed'], output_dict['optical_flow'] = self.deform_input(source_image, output_dict['optical_flow'])
+        output_dict['deformed'], output_dict['optical_flow'] = self.deform_input(source_image, motion_params_stage2['optical_flow'])
         
         for i, up_block in enumerate(self.up_blocks2):
             if self.skips:
@@ -164,7 +176,7 @@ class Generator(nn.Module):
         out = F.sigmoid(out)
 
         if self.skips:
-            out, output_dict['occlusion_map'] = self.apply_optical(input_skip=source_image, input_previous=out, motion_params=motion_params)
+            out, output_dict['occlusion_map'] = self.apply_optical(input_skip=source_image, input_previous=out, motion_params=motion_params_stage2)
         output_dict["prediction"] = out
         
         return output_dict
